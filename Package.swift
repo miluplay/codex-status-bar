@@ -20,12 +20,14 @@ let package = Package(
             exclude: ["Resources"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
-                .linkedFramework("ServiceManagement")
+                .linkedFramework("ServiceManagement"),
+                .linkedFramework("UserNotifications")
             ]
         ),
         .testTarget(
             name: "CodexBarCoreTests",
-            dependencies: ["CodexBarCore"]
+            dependencies: ["CodexBarCore"],
+            path: "Engineering/Tests/CodexBarCoreTests"
         ),
     ]
 )

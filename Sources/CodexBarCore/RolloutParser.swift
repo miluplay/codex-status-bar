@@ -21,6 +21,7 @@ public final class RolloutParser {
     public func parse(lines: [String], path: String = "") -> ParsedRollout {
         var latestEventAt: Date?
         var latestTaskStartedAt: Date?
+        var successfulCompletionAt: Date?
         var latestTaskCompletedAt: Date?
         var latestStatusLabel: String?
         var latestToolLabel: String?
@@ -76,6 +77,7 @@ public final class RolloutParser {
                     latestToolLabel = nil
                 case "task_complete":
                     latestTaskCompletedAt = Self.lifecycleDate(payload["completed_at"], fallback: timestamp)
+                    successfulCompletionAt = latestTaskCompletedAt
                     hasOpenTask = false
                     latestStatusLabel = nil
                     latestToolLabel = nil
@@ -201,7 +203,8 @@ public final class RolloutParser {
             metadata: metadata,
             relatedSessionIDs: forkedFromID == nil ? importedSessionIDs : [],
             forkedFromID: forkedFromID,
-            hasOpenTask: hasOpenTask
+            hasOpenTask: hasOpenTask,
+            successfulCompletionAt: successfulCompletionAt
         )
     }
 

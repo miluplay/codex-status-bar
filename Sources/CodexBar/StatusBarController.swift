@@ -1,9 +1,13 @@
 import AppKit
 import CodexBarCore
 import ServiceManagement
+import UserNotifications
 
-final class StatusBarController: NSObject, NSMenuDelegate {
+final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private enum DefaultsKey {
+        static let notifyCompleted = "notifyCompleted"
+        static let notifyWaiting = "notifyWaiting"
+        static let showStatusText = "showStatusText"
         static let showTimer = "showTimer"
         static let showFiveHourUsage = "showFiveHourUsage"
         static let showWeeklyUsage = "showWeeklyUsage"
@@ -16,6 +20,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private enum MenuLayout {
         static let maxWidth: CGFloat = 300
+        static let maxStatusItemWidth: CGFloat = 180
     }
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -27,6 +32,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let sessionMenuLimit = 6
     private let pollInterval: TimeInterval = 0.2
 
+    private var notificationTracker = CodexNotificationTracker()
+    private var notificationGenerations: [String: Int] = [:]
+
+    private var settingsWindowController: SettingsWindowController?
+
     private var pollTimer: Timer?
     private var animationTimer: Timer?
     private var animationTimerMode: StatusIconAnimationMode?
@@ -36,6 +46,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var snapshot = CodexSnapshot.empty()
     private var sessionRows: [String: SessionMenuItemView] = [:]
     private var sessionRowIDs: [String] = []
+
+    private var showStatusText: Bool {
+        get { UserDefaults.standard.bool(forKey: DefaultsKey.showStatusText, defaultValue: false) }
+        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.showStatusText) }
+    }
 
     private var showTimer: Bool {
         get { UserDefaults.standard.bool(forKey: DefaultsKey.showTimer, defaultValue: true) }
@@ -70,6 +85,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     override init() {
         super.init()
+        UNUserNotificationCenter.current().delegate = self
+
+        statusItem.autosaveName = "CodexStatusBar.Main"
+        statusItem.isVisible = true
+        statusItem.button?.setAccessibilityIdentifier("CodexStatusBar.Main")
+        statusItem.button?.setAccessibilityLabel("Codex 状态栏")
+        statusItem.button?.toolTip = "Codex 状态栏"
 
         let menu = NSMenu()
         menu.delegate = self
@@ -272,10 +294,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @discardableResult
     private func showAlert(message: String, informativeText: String, buttons: [String]) -> NSApplication.ModalResponse {
         let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = informativeText
+        alert.messageText = ChinesePresentation.text(message)
+        alert.informativeText = ChinesePresentation.text(informativeText)
         alert.alertStyle = .informational
-        buttons.forEach { alert.addButton(withTitle: $0) }
+        buttons.forEach { alert.addButton(withTitle: ChinesePresentation.text($0)) }
         NSApp.activate(ignoringOtherApps: true)
         return alert.runModal()
     }
@@ -294,6 +316,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
 
+                self.sendNotifications(for: next)
                 self.snapshot = next
                 self.isLoading = false
                 self.render()
@@ -318,7 +341,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             animationMode: iconAnimationMode,
             appearance: appearance
         )
-        applyTitle(state.title, statusDot: state.statusDot)
+        let title = ChinesePresentation.text(state.title)
+        statusItem.button?.toolTip = "Codex 状态栏：\(title)"
+        applyTitle(showStatusText ? title : "", statusDot: state.statusDot)
     }
 
     private func updateAnimation(active: Bool, mode: StatusIconAnimationMode) {
@@ -356,8 +381,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.imagePosition = .imageOnly
             button.title = ""
             button.attributedTitle = NSAttributedString(string: "")
-            statusDotView.isHidden = true
             statusItem.length = 28
+            button.layoutSubtreeIfNeeded()
+            updateStatusDot(statusDot, in: button, font: .menuFont(ofSize: 13))
             applyRoundedButtonChrome()
             return
         }
@@ -372,7 +398,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let buttonTitle = Self.buttonTitle(title, statusDot: statusDot)
         button.title = buttonTitle
         let imageWidth = button.image?.size.width ?? 18
-        statusItem.length = max(48, ceil(Self.titleWidth(buttonTitle, font: font) + imageWidth + 16))
+        statusItem.length = min(MenuLayout.maxStatusItemWidth, max(48, ceil(Self.titleWidth(buttonTitle, font: font) + imageWidth + 16)))
         button.layoutSubtreeIfNeeded()
         updateStatusDot(statusDot, in: button, font: font)
         applyRoundedButtonChrome()
@@ -393,6 +419,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let titleRect = button.cell?.titleRect(forBounds: button.bounds) ?? button.bounds
         let spaceWidth = Self.titleWidth(" ", font: font)
         let dotSlotWidth = Self.titleWidth(Self.statusDotPlaceholder, font: font)
+        if button.title.isEmpty {
+            statusDotView.frame = NSRect(
+                x: max(0, button.bounds.width - dotSize.width - 2),
+                y: max(0, buttonHeight - dotSize.height - 2),
+                width: dotSize.width,
+                height: dotSize.height
+            )
+            statusDotView.isHidden = false
+            return
+        }
         statusDotView.frame = NSRect(
             x: titleRect.minX + spaceWidth + floor((dotSlotWidth - dotSize.width) / 2),
             y: floor((buttonHeight - dotSize.height) / 2),
@@ -418,30 +454,35 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         button.wantsLayer = false
     }
 
+    func showMenu() {
+        guard let menu = statusItem.menu else { return }
+        menuNeedsUpdate(menu)
+        NSApp.activate(ignoringOtherApps: true)
+        // A context menu remains reachable when the status item is hidden or crowded out.
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         sessionRows.removeAll()
         sessionRowIDs.removeAll()
 
-        let openItem = NSMenuItem(title: "Open Codex", action: #selector(openCodex), keyEquivalent: "")
-        openItem.target = self
-        menu.addItem(openItem)
-
+        addStatusRows(to: menu)
         menu.addItem(.separator())
-        menu.addItem(disabledItem("Sessions"))
+        let sessionsHeader = disabledItem("Sessions")
+        sessionsHeader.identifier = NSUserInterfaceItemIdentifier("sessionsHeader")
+        menu.addItem(sessionsHeader)
         addSessionRows(to: menu)
 
         menu.addItem(.separator())
-        addStatusRows(to: menu)
-
-        menu.addItem(.separator())
-        addOptionsMenu(to: menu)
-        addColorMenu(to: menu)
-        addAnimationMenu(to: menu)
-
-        menu.addItem(.separator())
-        menu.addItem(disabledItem(versionTitle()))
-        let quit = NSMenuItem(title: "Quit Codex Status Bar", action: #selector(quit), keyEquivalent: "q")
+        let openItem = NSMenuItem(title: "打开 Codex", action: #selector(openCodex), keyEquivalent: "o")
+        openItem.target = self
+        menu.addItem(openItem)
+        addQuickActions(to: menu)
+        let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+        let quit = NSMenuItem(title: "退出 Codex 状态栏", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
     }
@@ -482,7 +523,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             self?.openCodexThread(currentSession)
         }
         item.view = view
-        item.toolTip = session.statusLabel
+        item.toolTip = session.statusLabel.map(ChinesePresentation.text)
         sessionRows[sessionRowKey(for: session)] = view
         sessionRowIDs.append(sessionRowKey(for: session))
         return item
@@ -509,8 +550,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func replaceSessionRows(in menu: NSMenu, with sessions: [CodexSession]) {
-        let startIndex = 3
-        guard menu.numberOfItems >= startIndex else { return }
+        guard let headerIndex = menu.items.firstIndex(where: {
+            $0.identifier == NSUserInterfaceItemIdentifier("sessionsHeader")
+        }) else { return }
+        let startIndex = headerIndex + 1
 
         var endIndex = startIndex
         while endIndex < menu.numberOfItems,
@@ -537,64 +580,36 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    private func addOptionsMenu(to menu: NSMenu) {
-        let item = NSMenuItem(title: CodexBarMenuLayout.optionsTitle, action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-
-        let timerItem = NSMenuItem(title: CodexBarMenuLayout.showTimerTitle, action: #selector(toggleTimer), keyEquivalent: "")
-        timerItem.target = self
-        timerItem.state = showTimer ? .on : .off
-        submenu.addItem(timerItem)
-
-        let fiveHourItem = NSMenuItem(title: CodexBarMenuLayout.showFiveHourUsageTitle, action: #selector(toggleFiveHourUsage), keyEquivalent: "")
-        fiveHourItem.target = self
-        fiveHourItem.state = showFiveHourUsage ? .on : .off
-        submenu.addItem(fiveHourItem)
-
-        let weeklyItem = NSMenuItem(title: CodexBarMenuLayout.showWeeklyUsageTitle, action: #selector(toggleWeeklyUsage), keyEquivalent: "")
-        weeklyItem.target = self
-        weeklyItem.state = showWeeklyUsage ? .on : .off
-        submenu.addItem(weeklyItem)
-
-        let startAtLoginItem = NSMenuItem(title: CodexBarMenuLayout.startAtLoginTitle, action: #selector(toggleStartAtLogin), keyEquivalent: "")
-        startAtLoginItem.target = self
-        startAtLoginItem.state = startAtLoginMenuState()
-        submenu.addItem(startAtLoginItem)
-
-        item.submenu = submenu
-        menu.addItem(item)
-    }
-
-    private func addColorMenu(to menu: NSMenu) {
-        let item = NSMenuItem(title: CodexBarMenuLayout.colorTitle, action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-
-        for mode in StatusIconColorMode.allCases {
-            let modeItem = NSMenuItem(title: mode.title, action: #selector(setIconColorMode(_:)), keyEquivalent: "")
-            modeItem.target = self
-            modeItem.representedObject = mode.rawValue
-            modeItem.state = iconColorMode == mode ? .on : .off
-            submenu.addItem(modeItem)
+    @objc private func openSettings() {
+        if settingsWindowController == nil {
+            let settings = SettingsWindowController(version: ChinesePresentation.text(versionTitle()))
+            settings.addSection("显示")
+            settings.addToggle("显示状态文字", state: { [weak self] in self?.showStatusText == true ? .on : .off }, action: { [weak self] in self?.toggleStatusText() })
+            settings.addToggle("显示运行计时", state: { [weak self] in self?.showTimer == true ? .on : .off }, action: { [weak self] in self?.toggleTimer() })
+            settings.addToggle("显示 5 小时额度", state: { [weak self] in self?.showFiveHourUsage == true ? .on : .off }, action: { [weak self] in self?.toggleFiveHourUsage() })
+            settings.addToggle("显示周额度", state: { [weak self] in self?.showWeeklyUsage == true ? .on : .off }, action: { [weak self] in self?.toggleWeeklyUsage() })
+            settings.addSection("外观")
+            settings.addChoice("图标颜色", options: StatusIconColorMode.allCases.map { (ChinesePresentation.text($0.title), $0.rawValue) }, selected: { [weak self] in self?.iconColorMode.rawValue ?? StatusIconColorMode.system.rawValue }) { [weak self] value in
+                guard let self, let mode = StatusIconColorMode(rawValue: value) else { return }
+                self.iconColorMode = mode
+                self.render()
+            }
+            settings.addChoice("动画效果", options: StatusIconAnimationMode.allCases.map { (ChinesePresentation.text($0.title), $0.rawValue) }, selected: { [weak self] in self?.iconAnimationMode.rawValue ?? StatusIconAnimationMode.orbit.rawValue }) { [weak self] value in
+                guard let self, let mode = StatusIconAnimationMode(rawValue: value) else { return }
+                self.iconAnimationMode = mode
+                self.render()
+            }
+            settings.addSection("通知")
+            for (title, key) in [("任务完成通知", DefaultsKey.notifyCompleted), ("等待输入或授权通知", DefaultsKey.notifyWaiting)] {
+                settings.addToggle(title, state: { UserDefaults.standard.bool(forKey: key) ? .on : .off }) { [weak self] in
+                    self?.toggleNotification(key: key)
+                }
+            }
+            settings.addSection("通用")
+            settings.addToggle("开机启动", state: { [weak self] in self?.startAtLoginMenuState() ?? .off }, action: { [weak self] in self?.toggleStartAtLogin() })
+            settingsWindowController = settings
         }
-
-        item.submenu = submenu
-        menu.addItem(item)
-    }
-
-    private func addAnimationMenu(to menu: NSMenu) {
-        let item = NSMenuItem(title: CodexBarMenuLayout.animationTitle, action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-
-        for mode in StatusIconAnimationMode.allCases {
-            let modeItem = NSMenuItem(title: mode.title, action: #selector(setIconAnimationMode(_:)), keyEquivalent: "")
-            modeItem.target = self
-            modeItem.representedObject = mode.rawValue
-            modeItem.state = iconAnimationMode == mode ? .on : .off
-            submenu.addItem(modeItem)
-        }
-
-        item.submenu = submenu
-        menu.addItem(item)
+        settingsWindowController?.present()
     }
 
     private func addStatusRows(to menu: NSMenu) {
@@ -611,7 +626,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func disabledItem(_ title: String) -> NSMenuItem {
-        let title = truncate(title, limit: 30)
+        let title = truncate(ChinesePresentation.text(title), limit: 30)
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         return item
@@ -632,6 +647,96 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             return .off
         @unknown default:
             return .off
+        }
+    }
+
+    private func addQuickActions(to menu: NSMenu) {
+        let projects = NSMenuItem(title: "项目快捷操作", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        var paths = Set<String>()
+        for session in visibleMenuSessions() where session.cwd.hasPrefix("/") && paths.insert(session.cwd).inserted {
+            let project = NSMenuItem(title: URL(fileURLWithPath: session.cwd).lastPathComponent, action: nil, keyEquivalent: "")
+            project.toolTip = session.cwd
+            let actions = NSMenu()
+            for (title, selector) in [("在 Finder 中打开", #selector(openProject(_:))), ("复制项目路径", #selector(copyProjectPath(_:)))] {
+                let action = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+                action.target = self
+                action.representedObject = session.cwd
+                actions.addItem(action)
+            }
+            project.submenu = actions
+            submenu.addItem(project)
+        }
+        if submenu.items.isEmpty { submenu.addItem(disabledItem("暂无可用项目")) }
+        projects.submenu = submenu
+        menu.addItem(projects)
+    }
+
+    @objc private func openProject(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        if !NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true)) {
+            showAlert(message: "无法打开项目目录", informativeText: "目录可能已移动或删除。", buttons: ["OK"])
+        }
+    }
+
+    @objc private func copyProjectPath(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    private func toggleNotification(key: String) {
+        let generation = (notificationGenerations[key] ?? 0) + 1
+        notificationGenerations[key] = generation
+        if UserDefaults.standard.bool(forKey: key) {
+            UserDefaults.standard.set(false, forKey: key)
+            return
+        }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
+            DispatchQueue.main.async {
+                guard let self, self.notificationGenerations[key] == generation else { return }
+                UserDefaults.standard.set(granted, forKey: key)
+                self.settingsWindowController?.refresh()
+                if !granted {
+                    self.showAlert(message: "通知未开启", informativeText: error?.localizedDescription ?? "请在系统设置 > 通知中允许 Codex 状态栏发送通知，然后重新开启此选项。", buttons: ["OK"])
+                }
+            }
+        }
+    }
+
+    private func sendNotifications(for next: CodexSnapshot) {
+        for event in notificationTracker.update(next) {
+            let key = event.kind == .completed ? DefaultsKey.notifyCompleted : DefaultsKey.notifyWaiting
+            guard UserDefaults.standard.bool(forKey: key) else { continue }
+            let content = UNMutableNotificationContent()
+            switch event.kind {
+            case .completed: content.title = "Codex 任务已完成"
+            case .input: content.title = "Codex 等待你的输入"
+            case .approval: content.title = "Codex 等待你的授权"
+            }
+            content.body = event.project.isEmpty ? "打开 Codex 查看会话。" : "项目：\(event.project)"
+            content.sound = .default
+            content.userInfo = ["sessionID": event.sessionID]
+            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error { NSLog("Codex Status Bar notification: %@", error.localizedDescription) }
+            }
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        let sessionID = response.notification.request.content.userInfo["sessionID"] as? String
+        DispatchQueue.main.async { [weak self] in
+            if let sessionID, let url = CodexBarPresentation.codexThreadURL(for: sessionID), NSWorkspace.shared.open(url) {
+                completionHandler()
+                return
+            }
+            self?.openCodex()
+            completionHandler()
         }
     }
 
@@ -661,6 +766,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func toggleStatusText() {
+        showStatusText.toggle()
+        render()
+    }
+
     @objc private func toggleTimer() {
         showTimer.toggle()
         render()
@@ -673,30 +783,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func toggleWeeklyUsage() {
         showWeeklyUsage.toggle()
-        render()
-    }
-
-    @objc private func setIconColorMode(_ sender: NSMenuItem) {
-        guard
-            let rawValue = sender.representedObject as? String,
-            let mode = StatusIconColorMode(rawValue: rawValue)
-        else {
-            return
-        }
-
-        iconColorMode = mode
-        render()
-    }
-
-    @objc private func setIconAnimationMode(_ sender: NSMenuItem) {
-        guard
-            let rawValue = sender.representedObject as? String,
-            let mode = StatusIconAnimationMode(rawValue: rawValue)
-        else {
-            return
-        }
-
-        iconAnimationMode = mode
         render()
     }
 
@@ -870,7 +956,7 @@ private final class SessionMenuItemView: NSView {
         if !isOpenable {
             highlighted = false
         }
-        toolTip = session.statusLabel
+        toolTip = session.statusLabel.map(ChinesePresentation.text)
 
         titleLabel.stringValue = session.title
         badgeView.update(text: session.client?.rawValue)
@@ -1020,7 +1106,7 @@ private final class SessionMenuItemView: NSView {
     }
 
     private func updateElapsedTime(now: Date) {
-        let timeText = session.activeStartedAt.map { Self.elapsedText(since: $0, now: now) } ?? ""
+        let timeText = session.activeStartedAt.map { ChinesePresentation.text(Self.elapsedText(since: $0, now: now)) } ?? ""
         guard timeLabel.stringValue != timeText || timeLabel.isHidden != timeText.isEmpty else { return }
 
         timeLabel.stringValue = timeText

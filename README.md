@@ -1,5 +1,46 @@
 # Codex Status Bar
 
+## 个人定制版
+
+本 fork 的第一轮定制：
+
+- 中文菜单、状态、计时、用量说明和首次启动提示。
+- 下拉菜单集中展示额度、重置时间和会话状态；点击「设置…」（⌘,）打开独立窗口，按显示、外观、通知、通用分组配置，即时生效。再次打开会聚焦已有窗口，原有偏好自动保留。
+- 默认只占 28 像素宽显示图标，减少菜单栏空间占用。悬停可查看完整状态；「设置… > 显示 > 显示状态文字」可恢复菜单栏文字。授权／未读状态圆点在图标模式下仍显示。
+- 启动或再次双击应用时，在鼠标位置弹出菜单；即使图标被菜单栏管理工具收起，仍可操作。定制版使用独立标识 `io.github.miluplay.codexstatusbar`，显示选项和通知权限与上游版本分开保存。
+- 打开菜单后可用 ⌘O 打开 Codex；「项目快捷操作」可在 Finder 中打开活跃／未读会话的项目，或复制项目路径。
+- 独立的「设置…」窗口中可分别开启任务完成通知、等待输入或授权通知。通知默认关闭，开启时申请 macOS 通知权限；点击通知打开对应 Codex 会话。CLI／IDE 会话能否直接打开取决于 Codex 桌面应用的支持。
+- 通知只包含状态和项目目录名，不显示提示词或会话正文；启动时不补发历史通知，同一等待状态不重复通知，取消任务不报完成。
+
+本地构建：`./Engineering/Build/build.sh --release`，产物位于 `Engineering/Build/build/CodexStatusBar.app`。
+
+`./Engineering/Build/build_and_run.sh --verify` 会构建调试版，再运行临时目录中的应用副本；验证输出包含该副本的 PID 和可执行文件路径。它会覆盖 `Engineering/Build/build/` 中的构建产物。活动监视器中进程名为 `CodexStatusBar`，应用提供独立设置窗口，没有 Dock 图标。
+
+同一应用标识只保留一个运行实例。如果 Applications 中也安装了此定制版，打开其他副本会唤起已有实例。要验证最新本地构建，请先退出已安装的定制版，再执行启动验证脚本；否则实际运行的可能仍是旧副本。
+
+## 项目目录
+
+```text
+Sources/                  # 应用和核心逻辑源码
+Package.swift             # Swift 包与测试目录配置
+Engineering/
+├── Build/
+│   ├── build.sh           # 构建应用、打包 DMG
+│   ├── build_and_run.sh   # 构建调试版并启动
+│   └── build/             # 构建产物，不纳入版本控制
+├── Tests/
+│   └── CodexBarCoreTests/ # 核心逻辑自动化测试
+└── Release/
+    ├── VERSION            # 用户可见版本号
+    ├── BUILD_NUMBER       # 构建编号
+    ├── CHANGELOG.md       # 版本更新记录
+    └── Formula/           # Homebrew 安装配方
+```
+
+构建和测试命令从项目根目录执行；Swift 编译缓存仍位于根目录的 `.build/`。测试入口仍为 `swift test`。Homebrew 配方兼容本 fork 的新目录和上游源码目录。
+
+以下为上游项目说明，Homebrew 和下载链接仍指向上游版本。
+
 A compact native macOS menu bar app that shows what Codex is doing locally.
 
 No window or dock icon. No network calls.
@@ -94,7 +135,7 @@ Codex Status Bar reads local Codex activity files and processes them on your Mac
 
 Codex Status Bar stores local display options in macOS preferences and registers itself as a login item on first launch; you can turn Start at login off from `Options`. The only write to Codex config is user-approved: on first launch, Codex Status Bar can disable Codex Desktop's own duplicate menu bar icon by writing `[desktop] mac-menu-bar-enabled = false` to `$CODEX_HOME/config.toml`.
 
-Development, source builds, and packaging live in [CONTRIBUTING.MD](CONTRIBUTING.MD). Release notes live in [CHANGELOG.md](CHANGELOG.md).
+Development, source builds, and packaging live in [CONTRIBUTING.MD](CONTRIBUTING.MD). Release notes live in [CHANGELOG.md](Engineering/Release/CHANGELOG.md).
 
 ## Acknowledgements
 

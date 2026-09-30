@@ -10,8 +10,14 @@ class CodexStatusBar < Formula
 
   def install
     ENV["SWIFT_BUILD_FLAGS"] = "--disable-sandbox"
-    system "./build.sh", "--release"
-    prefix.install "build/CodexStatusBar.app"
+    # Support both this fork's layout and the pinned upstream source archive.
+    if File.exist?("Engineering/Build/build.sh")
+      system "./Engineering/Build/build.sh", "--release"
+      prefix.install "Engineering/Build/build/CodexStatusBar.app"
+    else
+      system "./build.sh", "--release"
+      prefix.install "build/CodexStatusBar.app"
+    end
 
     (bin/"codex-status-bar").write <<~EOS
       #!/bin/bash

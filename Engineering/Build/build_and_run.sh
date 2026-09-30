@@ -3,10 +3,12 @@ set -euo pipefail
 
 MODE="${1:-run}"
 APP_NAME="CodexStatusBar"
-BUNDLE_ID="${BUNDLE_ID:-io.github.yuriipalam.codexstatusbar}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILT_APP_BUNDLE="$ROOT_DIR/build/$APP_NAME.app"
+BUNDLE_ID="${BUNDLE_ID:-io.github.miluplay.codexstatusbar}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BUILT_APP_BUNDLE="$ROOT_DIR/Engineering/Build/build/$APP_NAME.app"
 RUN_ROOT="${CODEX_STATUS_BAR_RUN_ROOT:-${TMPDIR:-/tmp}/codex-status-bar-run}"
+mkdir -p "$RUN_ROOT"
+RUN_ROOT="$(cd "$RUN_ROOT" && pwd -P)"
 RUN_APP_BUNDLE="$RUN_ROOT/$APP_NAME.app"
 APP_BUNDLE="$BUILT_APP_BUNDLE"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
@@ -15,9 +17,16 @@ usage() {
   echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
 }
 
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+while IFS= read -r app_pid; do
+  executable="$(ps -p "$app_pid" -o comm= || true)"
+  case "$executable" in
+    "$BUILT_APP_BUNDLE/Contents/MacOS/$APP_NAME"|"$RUN_APP_BUNDLE/Contents/MacOS/$APP_NAME")
+      kill "$app_pid" 2>/dev/null || true
+      ;;
+  esac
+done < <(pgrep -x "$APP_NAME" || true)
 
-"$ROOT_DIR/build.sh" --debug
+"$ROOT_DIR/Engineering/Build/build.sh" --debug
 
 prepare_run_bundle() {
   rm -rf "$RUN_APP_BUNDLE"
@@ -78,8 +87,22 @@ case "$MODE" in
     sleep 1
     strip_app_root_xattrs
     codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE" >/dev/null
-    pgrep -x "$APP_NAME" >/dev/null
-    echo "$APP_NAME is running"
+    app_pid="$(ps -axo pid=,comm= | awk -v binary="$APP_BINARY" '{pid=$1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if ($0 == binary && !found) found=pid} END {if (found) print found}')"
+    # macOS may canonicalize /var to /private/var for the executable path.
+    if [[ -z "$app_pid" && "$APP_BINARY" == /var/* ]]; then
+      app_pid="$(ps -axo pid=,comm= | awk -v binary="/private$APP_BINARY" '{pid=$1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if ($0 == binary && !found) found=pid} END {if (found) print found}')"
+    fi
+    if [[ -z "$app_pid" ]]; then
+      echo "ERROR: the expected app did not stay running: $APP_BINARY" >&2
+      echo "If another installed copy of this fork is running, quit it before verifying the local build." >&2
+      exit 1
+    fi
+    sleep 2
+    kill -0 "$app_pid"
+    echo "$APP_NAME is running (PID $app_pid)"
+    echo "Verified executable: $APP_BINARY"
+    echo "This is a menu bar app. Reopen the app to show its menu."
+
     ;;
   *)
     usage

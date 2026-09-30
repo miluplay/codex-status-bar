@@ -111,8 +111,43 @@ final class StatusIconRenderer {
             image = renderedPulseIcon(scale: 1.0, colorMode: colorMode)
         }
 
-        cache[key] = image
-        return image
+        // Status items may hand images to the menu bar server. Supply concrete
+        // bitmap representations rather than a deferred NSCustomImageRep closure.
+        let bitmapImage = Self.rasterizedImage(image)
+        cache[key] = bitmapImage
+        return bitmapImage
+    }
+
+    private static func rasterizedImage(_ source: NSImage) -> NSImage {
+        let result = NSImage(size: source.size)
+        for scale in [1, 2, 3] {
+            guard let bitmap = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(source.size.width) * scale,
+                pixelsHigh: Int(source.size.height) * scale,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            ) else { continue }
+            bitmap.size = source.size
+            guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            let rect = NSRect(origin: .zero, size: source.size)
+            context.cgContext.clear(rect)
+            source.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+            result.addRepresentation(bitmap)
+        }
+        guard !result.representations.isEmpty else {
+            return NSImage(systemSymbolName: "terminal", accessibilityDescription: "Codex") ?? source
+        }
+        result.isTemplate = source.isTemplate
+        return result
     }
 
     private func normalizedFrame(_ frame: Int, animationMode: StatusIconAnimationMode) -> Int {
