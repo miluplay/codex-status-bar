@@ -90,6 +90,7 @@ public struct CodexSession: Equatable, Sendable {
     public let lastEventAt: Date?
     public let statusLabel: String?
     public let isUnread: Bool
+    public let completedAt: Date?
 
     public init(
         id: String,
@@ -101,7 +102,8 @@ public struct CodexSession: Equatable, Sendable {
         activeStartedAt: Date?,
         lastEventAt: Date?,
         statusLabel: String?,
-        isUnread: Bool = false
+        isUnread: Bool = false,
+        completedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -113,6 +115,7 @@ public struct CodexSession: Equatable, Sendable {
         self.lastEventAt = lastEventAt
         self.statusLabel = statusLabel
         self.isUnread = isUnread
+        self.completedAt = completedAt
     }
 
     public var isActive: Bool {
@@ -135,6 +138,7 @@ public struct ParsedRollout: Equatable, Sendable {
     public let relatedSessionIDs: Set<String>
     public let forkedFromID: String?
     public let hasOpenTask: Bool
+    public let successfulCompletionAt: Date?
 
     public init(
         path: String,
@@ -146,8 +150,10 @@ public struct ParsedRollout: Equatable, Sendable {
         metadata: SessionMetadata? = nil,
         relatedSessionIDs: Set<String> = [],
         forkedFromID: String? = nil,
-        hasOpenTask: Bool? = nil
+        hasOpenTask: Bool? = nil,
+        successfulCompletionAt: Date? = nil
     ) {
+        self.successfulCompletionAt = successfulCompletionAt
         self.path = path
         self.latestEventAt = latestEventAt
         self.latestTaskStartedAt = latestTaskStartedAt

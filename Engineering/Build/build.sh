@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds CodexStatusBar.app, and optionally a local DMG with: ./build.sh --dmg
+# Builds CodexStatusBar.app, and optionally a local DMG with: ./Engineering/Build/build.sh --dmg
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 APP_NAME="CodexStatusBar"
@@ -11,13 +11,13 @@ BUNDLE_NAME="$APP_NAME.app"
 VOLUME_NAME="Codex Status Bar"
 CONFIGURATION="${CONFIGURATION:-release}"
 MAKE_DMG=0
-OUTPUT_DIR="$ROOT_DIR/build"
+OUTPUT_DIR="$ROOT_DIR/Engineering/Build/build"
 STAGING_DIR="${CODEX_STATUS_BAR_STAGING_DIR:-}"
 CLEAN_STAGING_DIR=0
 
-BUNDLE_ID="${BUNDLE_ID:-io.github.yuriipalam.codexstatusbar}"
-APP_VERSION="${APP_VERSION:-$(<"$ROOT_DIR/VERSION")}"
-BUILD_NUMBER="${BUILD_NUMBER:-$(<"$ROOT_DIR/BUILD_NUMBER")}"
+BUNDLE_ID="${BUNDLE_ID:-io.github.miluplay.codexstatusbar}"
+APP_VERSION="${APP_VERSION:-$(<"$ROOT_DIR/Engineering/Release/VERSION")}"
+BUILD_NUMBER="${BUILD_NUMBER:-$(<"$ROOT_DIR/Engineering/Release/BUILD_NUMBER")}"
 MIN_SYSTEM_VERSION="${MIN_SYSTEM_VERSION:-13.0}"
 TEAM_ID="${CODEX_STATUS_BAR_TEAM_ID:-${TEAM_ID:-}}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-codexstatusbar}"
@@ -42,7 +42,7 @@ usage() {
   echo "usage: $0 [--debug|--release] [--dmg]" >&2
   echo "" >&2
   echo "Environment overrides:" >&2
-  echo "  BUNDLE_ID=io.github.yuriipalam.codexstatusbar" >&2
+  echo "  BUNDLE_ID=io.github.miluplay.codexstatusbar" >&2
   echo "  APP_VERSION=$APP_VERSION BUILD_NUMBER=$BUILD_NUMBER" >&2
   echo "  CODEX_STATUS_BAR_TEAM_ID=ABCDE12345 NOTARY_PROFILE=codexstatusbar" >&2
   echo "  SKIP_NOTARIZE=1" >&2

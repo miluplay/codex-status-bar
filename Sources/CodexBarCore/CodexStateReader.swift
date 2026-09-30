@@ -104,7 +104,8 @@ public final class CodexStateReader {
                 activeStartedAt: activeAgent?.startedAt,
                 lastEventAt: parsed.latestEventAt,
                 statusLabel: activeAgent?.label ?? parsed.latestStatusLabel,
-                isUnread: isUnread(threadID: thread.id, aliases: parsed.relatedSessionIDs, unreadState: unreadState)
+                isUnread: isUnread(threadID: thread.id, aliases: parsed.relatedSessionIDs, unreadState: unreadState),
+                completedAt: parsed.successfulCompletionAt
             )
             candidates.append(SnapshotCandidate(parsed: parsed, activeAgent: activeAgent, session: session))
 
