@@ -82,6 +82,7 @@ public final class CodexStateReader {
         now: Date,
         lastError: String?
     ) -> CodexSnapshot {
+        let sessionTitles = loadSessionTitles()
         var candidates: [SnapshotCandidate] = []
         var latestUsage: UsageSnapshot?
         var observedPaths: Set<String> = []
@@ -90,7 +91,7 @@ public final class CodexStateReader {
             guard let loaded = parseCached(path: record.rolloutPath), loaded.isVerified else { continue }
             let parsed = loaded.parsed
             observedPaths.insert(record.rolloutPath)
-            let thread = threadRecord(for: record, parsed: parsed)
+            let thread = threadRecord(for: record, parsed: parsed, titles: sessionTitles)
 
             let activeAgent = parsed.activeAgent(thread: thread, now: now, staleAfter: staleAfter)
 
@@ -250,7 +251,7 @@ public final class CodexStateReader {
         return candidate.session.rolloutPath > existing.session.rolloutPath
     }
 
-    private func threadRecord(for record: ThreadRecord, parsed: ParsedRollout) -> ThreadRecord {
+    private func threadRecord(for record: ThreadRecord, parsed: ParsedRollout, titles: [String: String]) -> ThreadRecord {
         let metadata = parsed.metadata
         let cwd = metadata?.cwd.nilIfEmpty ?? record.cwd
         let fallbackID = record.id
@@ -258,11 +259,28 @@ public final class CodexStateReader {
 
         return ThreadRecord(
             id: id,
-            title: sessionTitle(cwd: cwd, fallback: record.title),
+            title: titles[id] ?? sessionTitle(cwd: cwd, fallback: record.title),
             rolloutPath: record.rolloutPath,
             cwd: cwd,
             updatedAt: record.updatedAt
         )
+    }
+
+    private func loadSessionTitles() -> [String: String] {
+        let url = codexHome.appendingPathComponent("session_index.jsonl")
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        var entries: [String: (title: String?, updatedAt: Date)] = [:]
+        for line in data.split(separator: 0x0A) {
+            guard let record = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                  let id = (record["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                  let rawTitle = record["thread_name"] as? String
+            else { continue }
+            let title = rawTitle.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            let updatedAt = DateParsing.parseISO8601(record["updated_at"] as? String) ?? .distantPast
+            if let existing = entries[id], existing.updatedAt > updatedAt { continue }
+            entries[id] = (title, updatedAt)
+        }
+        return entries.compactMapValues(\.title)
     }
 
     private func sessionTitle(cwd: String, fallback: String) -> String {

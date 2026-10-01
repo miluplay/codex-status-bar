@@ -4,6 +4,49 @@ import Testing
 
 @Suite
 struct CodexStateReaderTests {
+    @Test func sessionNamesOverrideProjectNamesAndRefreshWithoutRolloutChanges() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CodexBarTitleTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeActiveSession(in: root)
+        let index = root.appendingPathComponent("session_index.jsonl")
+        try "{\"id\":\"thread-1\",\"thread_name\":\"修复登录问题\",\"updated_at\":\"2026-06-24T20:00:00Z\"}\n".write(to: index, atomically: true, encoding: .utf8)
+        let reader = CodexStateReader(codexHome: root)
+        let now = date("2026-06-24T20:00:30.000Z")
+        let first = reader.loadSnapshot(now: now)
+        #expect(first.sessions.first?.title == "修复登录问题")
+        #expect(first.activeAgents.first?.title == "修复登录问题")
+        #expect(first.sessions.first?.cwd.hasSuffix("ripple-effect") == true)
+        try "{\"id\":\"thread-1\",\"thread_name\":\"优化设置页面\",\"updated_at\":\"2026-06-24T20:00:20Z\"}\n".write(to: index, atomically: true, encoding: .utf8)
+        #expect(reader.loadSnapshot(now: now).sessions.first?.title == "优化设置页面")
+        try FileManager.default.removeItem(at: index)
+        #expect(reader.loadSnapshot(now: now).sessions.first?.title == "ripple-effect")
+    }
+
+    @Test func titleIndexSkipsInvalidRowsAndUsesLatestNameForEachSession() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CodexBarTitleIndexTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeActiveSession(in: root)
+        try writeCompletedSession(in: root, id: "thread-2", folderName: "ripple-effect")
+        let index = """
+        {"id":"thread-1","thread_name":"  调整菜单布局  ","updated_at":"2026-06-24T20:00:20Z"}
+        {"id":"thread-1","thread_name":"旧名称","updated_at":"2026-06-24T20:00:00Z"}
+        {"id":"thread-2","thread_name":"调整额度显示"}
+        {"id":"thread-1","thread_name":"  "}
+        {"id":"thread-1","thread_name":42}
+        {"thread_name":"缺少会话 ID"}
+        {invalid JSON}
+        {"id":"thread-1"
+        """
+        try index.write(to: root.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+        let snapshot = CodexStateReader(codexHome: root).loadSnapshot(now: date("2026-06-24T20:00:30.000Z"))
+        #expect(snapshot.sessions.first(where: { $0.id == "thread-1" })?.title == "调整菜单布局")
+        #expect(snapshot.sessions.first(where: { $0.id == "thread-2" })?.title == "调整额度显示")
+        let clearedIndex = index + "\n" + #"{"id":"thread-1","thread_name":"  ","updated_at":"2026-06-24T20:00:25Z"}"#
+        try clearedIndex.write(to: root.appendingPathComponent("session_index.jsonl"), atomically: true, encoding: .utf8)
+        let cleared = CodexStateReader(codexHome: root).loadSnapshot(now: date("2026-06-24T20:00:30.000Z"))
+        #expect(cleared.sessions.first(where: { $0.id == "thread-1" })?.title == "ripple-effect")
+    }
+
     @Test
     func snapshotIncludesSessionRowsFromMetadata() throws {
         let fileManager = FileManager.default

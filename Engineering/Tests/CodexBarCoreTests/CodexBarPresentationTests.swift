@@ -4,6 +4,27 @@ import Testing
 
 @Suite
 struct CodexBarPresentationTests {
+    @Test func pinnedUsageStaysVisibleDuringWorkAndWithoutStatusText() {
+        let now = date("2026-06-24T20:01:05.000Z")
+        for label in ["Thinking...", "Waiting for approval", "Waiting for input"] {
+            let snapshot = CodexSnapshot(activeAgents: [activeAgent(label: label, startedAt: now, lastEventAt: now)], usage: usage(primaryUsed: 36, secondaryUsed: 76), generatedAt: now, lastError: nil)
+            let compact = CodexBarPresentation.displayState(snapshot: snapshot, options: CodexBarDisplayOptions(showStatusText: false, fiveHourUsageVisibility: .always, weeklyUsageVisibility: .idle), now: now)
+            #expect(compact.title == "5H 64%")
+            let expanded = CodexBarPresentation.displayState(snapshot: snapshot, options: CodexBarDisplayOptions(fiveHourUsageVisibility: .hidden, weeklyUsageVisibility: .always), now: now)
+            #expect(expanded.title.hasPrefix("7D 24% · "))
+            #expect(compact.animatesIcon == expanded.animatesIcon)
+            #expect(compact.statusDot == expanded.statusDot)
+        }
+    }
+
+    @Test func bothPinnedWindowsAndHiddenWindowsWorkWithoutStatusText() {
+        let snapshot = CodexSnapshot(activeAgents: [], usage: usage(primaryUsed: 36, secondaryUsed: 76), generatedAt: Date(), lastError: nil)
+        let both = CodexBarPresentation.displayState(snapshot: snapshot, options: CodexBarDisplayOptions(showStatusText: false, fiveHourUsageVisibility: .always, weeklyUsageVisibility: .always), now: snapshot.generatedAt)
+        #expect(both.title == "5H 64% 7D 24%")
+        let hidden = CodexBarPresentation.displayState(snapshot: snapshot, options: CodexBarDisplayOptions(showStatusText: false, fiveHourUsageVisibility: .hidden, weeklyUsageVisibility: .idle), now: snapshot.generatedAt)
+        #expect(hidden.title.isEmpty)
+    }
+
     @Test
     func idleDisplayShowsConfiguredUsageWindows() {
         let snapshot = CodexSnapshot(
@@ -19,7 +40,7 @@ struct CodexBarPresentationTests {
             now: snapshot.generatedAt
         )
 
-        #expect(state.title == "5h88% w54%")
+        #expect(state.title == "5H 88% 7D 54%")
         #expect(state.animatesIcon == false)
     }
 
@@ -47,7 +68,7 @@ struct CodexBarPresentationTests {
             now: snapshot.generatedAt
         )
 
-        #expect(state.title == "5h -- w --")
+        #expect(state.title == "5H -- 7D --")
         #expect(state.animatesIcon == false)
     }
 
@@ -211,7 +232,7 @@ struct CodexBarPresentationTests {
     }
 
     @Test
-    func idleDisplayShowsUnreadCountBeforeConfiguredUsage() {
+    func idleDisplayKeepsUsageBeforeUnreadCount() {
         let now = date("2026-06-24T20:02:00.000Z")
         let snapshot = CodexSnapshot(
             activeAgents: [],
@@ -226,7 +247,7 @@ struct CodexBarPresentationTests {
 
         let state = CodexBarPresentation.displayState(snapshot: snapshot, now: now)
 
-        #expect(state.title == "1 unread 5h88% w54%")
+        #expect(state.title == "5H 88% 7D 54% · 1 unread")
         #expect(state.animatesIcon == false)
         #expect(state.statusDot == .unread)
     }

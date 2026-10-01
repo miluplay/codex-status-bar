@@ -9,7 +9,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(version: String) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 700),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -56,6 +56,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         label.font = .boldSystemFont(ofSize: 13)
         stack.setCustomSpacing(18, after: stack.arrangedSubviews.last!)
         stack.addArrangedSubview(label)
+    }
+
+    func addDescription(_ text: String) {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.preferredMaxLayoutWidth = 404
+        stack.addArrangedSubview(label)
+        label.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     }
 
     func addToggle(_ title: String, state: @escaping () -> NSControl.StateValue, action: @escaping () -> Void) {

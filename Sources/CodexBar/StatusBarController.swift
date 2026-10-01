@@ -11,6 +11,11 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         static let showTimer = "showTimer"
         static let showFiveHourUsage = "showFiveHourUsage"
         static let showWeeklyUsage = "showWeeklyUsage"
+        static let fiveHourUsageVisibility = "fiveHourUsageVisibility"
+        static let weeklyUsageVisibility = "weeklyUsageVisibility"
+        static let showMenuFiveHourUsage = "showMenuFiveHourUsage"
+        static let showMenuWeeklyUsage = "showMenuWeeklyUsage"
+        static let numericUsageCountdown = "numericUsageCountdown"
         static let iconColorMode = "iconColorMode"
         static let iconAnimationMode = "iconAnimationMode"
         static let didShowCodexAvailabilityCheck = "didShowCodexAvailabilityCheck"
@@ -20,7 +25,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
 
     private enum MenuLayout {
         static let maxWidth: CGFloat = 300
-        static let maxStatusItemWidth: CGFloat = 180
+        static let maxStatusItemWidth: CGFloat = 280
     }
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -37,6 +42,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     private var notificationGenerations: [String: Int] = [:]
 
     private var settingsWindowController: SettingsWindowController?
+    private var usageMenuView: UsageMenuItemView?
 
     private var pollTimer: Timer?
     private var animationTimer: Timer?
@@ -58,14 +64,35 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.showTimer) }
     }
 
-    private var showFiveHourUsage: Bool {
-        get { UserDefaults.standard.bool(forKey: DefaultsKey.showFiveHourUsage, defaultValue: true) }
-        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.showFiveHourUsage) }
+    private var fiveHourUsageVisibility: MenuBarUsageVisibility {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: DefaultsKey.fiveHourUsageVisibility), let mode = MenuBarUsageVisibility(rawValue: raw) { return mode }
+            return UserDefaults.standard.bool(forKey: DefaultsKey.showFiveHourUsage, defaultValue: true) ? .idle : .hidden
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: DefaultsKey.fiveHourUsageVisibility) }
     }
 
-    private var showWeeklyUsage: Bool {
-        get { UserDefaults.standard.bool(forKey: DefaultsKey.showWeeklyUsage, defaultValue: true) }
-        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.showWeeklyUsage) }
+    private var weeklyUsageVisibility: MenuBarUsageVisibility {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: DefaultsKey.weeklyUsageVisibility), let mode = MenuBarUsageVisibility(rawValue: raw) { return mode }
+            return UserDefaults.standard.bool(forKey: DefaultsKey.showWeeklyUsage, defaultValue: true) ? .idle : .hidden
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: DefaultsKey.weeklyUsageVisibility) }
+    }
+
+    private var showMenuFiveHourUsage: Bool {
+        get { UserDefaults.standard.bool(forKey: DefaultsKey.showMenuFiveHourUsage, defaultValue: true) }
+        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.showMenuFiveHourUsage) }
+    }
+
+    private var showMenuWeeklyUsage: Bool {
+        get { UserDefaults.standard.bool(forKey: DefaultsKey.showMenuWeeklyUsage, defaultValue: true) }
+        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.showMenuWeeklyUsage) }
+    }
+
+    private var numericUsageCountdown: Bool {
+        get { UserDefaults.standard.bool(forKey: DefaultsKey.numericUsageCountdown) }
+        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.numericUsageCountdown) }
     }
 
     private var iconColorMode: StatusIconColorMode {
@@ -92,7 +119,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         statusItem.isVisible = true
         statusItem.button?.setAccessibilityIdentifier("CodexStatusBar.Main")
         statusItem.button?.setAccessibilityLabel("Codex 状态栏")
-        statusItem.button?.toolTip = "Codex 状态栏"
+        statusItem.button?.toolTip = nil
 
         statusMenu.delegate = self
         configureStatusItemActions()
@@ -306,6 +333,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     private func tick() {
         loadSnapshot()
         render()
+        refreshOpenUsageRows()
     }
 
     private func loadSnapshot() {
@@ -322,6 +350,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
                 self.isLoading = false
                 self.render()
                 self.refreshOpenSessionRows()
+                self.refreshOpenUsageRows()
             }
         }
     }
@@ -342,9 +371,9 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
             animationMode: iconAnimationMode,
             appearance: appearance
         )
-        let title = ChinesePresentation.text(state.title)
-        statusItem.button?.toolTip = "Codex 状态栏：\(title)"
-        applyTitle(showStatusText ? title : "", statusDot: state.statusDot)
+        let title = state.title.components(separatedBy: " · ").map(ChinesePresentation.text).joined(separator: " · ")
+        statusItem.button?.toolTip = nil
+        applyTitle(title, statusDot: state.statusDot)
     }
 
     private func updateAnimation(active: Bool, mode: StatusIconAnimationMode) {
@@ -369,8 +398,9 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     private func displayOptions() -> CodexBarDisplayOptions {
         CodexBarDisplayOptions(
             showTimer: showTimer,
-            showFiveHourUsage: showFiveHourUsage,
-            showWeeklyUsage: showWeeklyUsage
+            showStatusText: showStatusText,
+            fiveHourUsageVisibility: fiveHourUsageVisibility,
+            weeklyUsageVisibility: weeklyUsageVisibility
         )
     }
 
@@ -501,7 +531,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         sessionRowIDs.removeAll()
 
         addStatusRows(to: menu)
-        menu.addItem(.separator())
+        if menu.numberOfItems > 0 { menu.addItem(.separator()) }
         let sessionsHeader = disabledItem("Sessions")
         sessionsHeader.identifier = NSUserInterfaceItemIdentifier("sessionsHeader")
         menu.addItem(sessionsHeader)
@@ -522,6 +552,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
 
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
+        refreshOpenUsageRows()
         refreshOpenSessionRows()
     }
 
@@ -529,6 +560,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         statusItem.menu = nil
         configureStatusItemActions()
         isMenuOpen = false
+        usageMenuView = nil
         sessionRows.removeAll()
         sessionRowIDs.removeAll()
     }
@@ -558,7 +590,6 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
             self?.openCodexThread(currentSession)
         }
         item.view = view
-        item.toolTip = session.statusLabel.map(ChinesePresentation.text)
         sessionRows[sessionRowKey(for: session)] = view
         sessionRowIDs.append(sessionRowKey(for: session))
         return item
@@ -622,8 +653,30 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
             settings.addSection("显示")
             settings.addToggle("显示状态文字", state: { [weak self] in self?.showStatusText == true ? .on : .off }, action: { [weak self] in self?.toggleStatusText() })
             settings.addToggle("显示运行计时", state: { [weak self] in self?.showTimer == true ? .on : .off }, action: { [weak self] in self?.toggleTimer() })
-            settings.addToggle("显示 5 小时额度", state: { [weak self] in self?.showFiveHourUsage == true ? .on : .off }, action: { [weak self] in self?.toggleFiveHourUsage() })
-            settings.addToggle("显示周额度", state: { [weak self] in self?.showWeeklyUsage == true ? .on : .off }, action: { [weak self] in self?.toggleWeeklyUsage() })
+            settings.addChoice("菜单栏 5H", options: MenuBarUsageVisibility.allCases.map { ($0.title, $0.rawValue) }, selected: { [weak self] in self?.fiveHourUsageVisibility.rawValue ?? MenuBarUsageVisibility.idle.rawValue }) { [weak self] value in
+                guard let self, let mode = MenuBarUsageVisibility(rawValue: value) else { return }
+                self.fiveHourUsageVisibility = mode
+                self.render()
+            }
+            settings.addChoice("菜单栏 7D", options: MenuBarUsageVisibility.allCases.map { ($0.title, $0.rawValue) }, selected: { [weak self] in self?.weeklyUsageVisibility.rawValue ?? MenuBarUsageVisibility.idle.rawValue }) { [weak self] value in
+                guard let self, let mode = MenuBarUsageVisibility(rawValue: value) else { return }
+                self.weeklyUsageVisibility = mode
+                self.render()
+            }
+            settings.addDescription("「始终显示」在运行中也保留额度，且不受「显示状态文字」影响；「空闲时显示」随状态文字显示。")
+            settings.addToggle("状态菜单显示 5H 额度", state: { [weak self] in self?.showMenuFiveHourUsage == true ? .on : .off }) { [weak self] in
+                self?.showMenuFiveHourUsage.toggle()
+            }
+            settings.addToggle("状态菜单显示 7D 额度", state: { [weak self] in self?.showMenuWeeklyUsage == true ? .on : .off }) { [weak self] in
+                self?.showMenuWeeklyUsage.toggle()
+            }
+            settings.addToggle("额度重置时间使用数字倒计时", state: { [weak self] in self?.numericUsageCountdown == true ? .on : .off }) { [weak self] in
+                guard let self else { return }
+                self.numericUsageCountdown.toggle()
+                self.refreshOpenUsageRows()
+            }
+            settings.addDescription("数字倒计时：5H 为时:分:秒，7D 为天:时:分。")
+            settings.addDescription("细线的灰色部分表示已用额度，蓝色游标表示周期时间进度。已用比例超过时间进度时，说明当前消耗较快。线下左侧为重置时间，右侧为剩余额度。")
             settings.addSection("外观")
             settings.addChoice("图标颜色", options: StatusIconColorMode.allCases.map { (ChinesePresentation.text($0.title), $0.rawValue) }, selected: { [weak self] in self?.iconColorMode.rawValue ?? StatusIconColorMode.system.rawValue }) { [weak self] value in
                 guard let self, let mode = StatusIconColorMode(rawValue: value) else { return }
@@ -648,13 +701,21 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         settingsWindowController?.present()
     }
 
-    private func addStatusRows(to menu: NSMenu) {
-        let now = Date()
+    private func refreshOpenUsageRows() {
+        guard isMenuOpen else { return }
+        usageMenuView?.update(usage: snapshot.usage, numericCountdown: numericUsageCountdown, now: Date())
+    }
 
-        menu.addItem(disabledItem(UsageFormatter.leftLine(snapshot.usage?.primary, fallbackLabel: "5h")))
-        menu.addItem(disabledItem(UsageFormatter.leftLine(snapshot.usage?.secondary, fallbackLabel: "Week")))
-        menu.addItem(disabledItem(UsageFormatter.resetLine(snapshot.usage?.primary, fallbackLabel: "5h", now: now)))
-        menu.addItem(disabledItem(UsageFormatter.resetLine(snapshot.usage?.secondary, fallbackLabel: "Week", now: now)))
+    private func addStatusRows(to menu: NSMenu) {
+        usageMenuView = nil
+        if showMenuFiveHourUsage || showMenuWeeklyUsage {
+            let item = NSMenuItem()
+            let view = UsageMenuItemView(width: MenuLayout.maxWidth, usage: snapshot.usage, numericCountdown: numericUsageCountdown, now: Date(), showPrimary: showMenuFiveHourUsage, showWeekly: showMenuWeeklyUsage)
+            item.view = view
+            item.isEnabled = false
+            menu.addItem(item)
+            usageMenuView = view
+        }
 
         if let lastError = snapshot.lastError?.nilIfEmpty {
             menu.addItem(disabledItem(truncate("Data: \(lastError)", limit: 30)))
@@ -692,7 +753,6 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         var paths = Set<String>()
         for session in visibleMenuSessions() where session.cwd.hasPrefix("/") && paths.insert(session.cwd).inserted {
             let project = NSMenuItem(title: URL(fileURLWithPath: session.cwd).lastPathComponent, action: nil, keyEquivalent: "")
-            project.toolTip = session.cwd
             let actions = NSMenu()
             for (title, selector) in [("在 Finder 中打开", #selector(openProject(_:))), ("复制项目路径", #selector(copyProjectPath(_:)))] {
                 let action = NSMenuItem(title: title, action: selector, keyEquivalent: "")
@@ -809,16 +869,6 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
 
     @objc private func toggleTimer() {
         showTimer.toggle()
-        render()
-    }
-
-    @objc private func toggleFiveHourUsage() {
-        showFiveHourUsage.toggle()
-        render()
-    }
-
-    @objc private func toggleWeeklyUsage() {
-        showWeeklyUsage.toggle()
         render()
     }
 
@@ -992,7 +1042,6 @@ private final class SessionMenuItemView: NSView {
         if !isOpenable {
             highlighted = false
         }
-        toolTip = session.statusLabel.map(ChinesePresentation.text)
 
         titleLabel.stringValue = session.title
         badgeView.update(text: session.client?.rawValue)

@@ -1,6 +1,21 @@
 import Foundation
 
+public enum MenuBarUsageVisibility: String, CaseIterable, Sendable {
+    case hidden, idle, always
+
+    public var title: String {
+        switch self {
+        case .hidden: "隐藏"
+        case .idle: "空闲时显示"
+        case .always: "始终显示"
+        }
+    }
+}
+
 public struct CodexBarDisplayOptions: Equatable, Sendable {
+    public let showStatusText: Bool
+    public let fiveHourUsageVisibility: MenuBarUsageVisibility
+    public let weeklyUsageVisibility: MenuBarUsageVisibility
     public let showTimer: Bool
     public let showFiveHourUsage: Bool
     public let showWeeklyUsage: Bool
@@ -8,11 +23,17 @@ public struct CodexBarDisplayOptions: Equatable, Sendable {
     public init(
         showTimer: Bool = true,
         showFiveHourUsage: Bool = true,
-        showWeeklyUsage: Bool = true
+        showWeeklyUsage: Bool = true,
+        showStatusText: Bool = true,
+        fiveHourUsageVisibility: MenuBarUsageVisibility? = nil,
+        weeklyUsageVisibility: MenuBarUsageVisibility? = nil
     ) {
         self.showTimer = showTimer
-        self.showFiveHourUsage = showFiveHourUsage
-        self.showWeeklyUsage = showWeeklyUsage
+        self.showStatusText = showStatusText
+        self.fiveHourUsageVisibility = fiveHourUsageVisibility ?? (showFiveHourUsage ? .idle : .hidden)
+        self.weeklyUsageVisibility = weeklyUsageVisibility ?? (showWeeklyUsage ? .idle : .hidden)
+        self.showFiveHourUsage = self.fiveHourUsageVisibility != .hidden
+        self.showWeeklyUsage = self.weeklyUsageVisibility != .hidden
     }
 }
 
@@ -66,6 +87,30 @@ public struct CodexSessionMenuRow: Equatable, Sendable {
 
 public enum CodexBarPresentation {
     public static func displayState(
+        snapshot: CodexSnapshot,
+        options: CodexBarDisplayOptions = CodexBarDisplayOptions(),
+        now: Date
+    ) -> CodexBarDisplayState {
+        let status = statusDisplayState(snapshot: snapshot, options: CodexBarDisplayOptions(showTimer: options.showTimer, showFiveHourUsage: false, showWeeklyUsage: false), now: now)
+        let idle = snapshot.activeAgents.isEmpty
+        func visible(_ mode: MenuBarUsageVisibility) -> Bool {
+            mode == .always || (mode == .idle && idle && options.showStatusText)
+        }
+        let usage = compactMenuBarUsage(snapshot.usage?.projected(at: now), options: CodexBarDisplayOptions(showFiveHourUsage: visible(options.fiveHourUsageVisibility), showWeeklyUsage: visible(options.weeklyUsageVisibility)))
+        let title: String
+        if !options.showStatusText {
+            title = usage
+        } else if usage.isEmpty {
+            title = status.title
+        } else if status.title == "Idle" {
+            title = usage
+        } else {
+            title = "\(usage) · \(status.title)"
+        }
+        return CodexBarDisplayState(title: title, animatesIcon: status.animatesIcon, statusDot: status.statusDot)
+    }
+
+    private static func statusDisplayState(
         snapshot: CodexSnapshot,
         options: CodexBarDisplayOptions = CodexBarDisplayOptions(),
         now: Date
@@ -129,17 +174,17 @@ public enum CodexBarPresentation {
 
         if options.showFiveHourUsage {
             if let primary = usage?.primary {
-                parts.append("5h\(UsageFormatter.percent(primary.leftPercent))")
+                parts.append("5H \(UsageFormatter.percent(primary.leftPercent))")
             } else {
-                parts.append("5h --")
+                parts.append("5H --")
             }
         }
 
         if options.showWeeklyUsage {
             if let secondary = usage?.secondary {
-                parts.append("w\(UsageFormatter.percent(secondary.leftPercent))")
+                parts.append("7D \(UsageFormatter.percent(secondary.leftPercent))")
             } else {
-                parts.append("w --")
+                parts.append("7D --")
             }
         }
 
