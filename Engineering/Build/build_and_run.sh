@@ -101,7 +101,7 @@ case "$MODE" in
     kill -0 "$app_pid"
     echo "$APP_NAME is running (PID $app_pid)"
     echo "Verified executable: $APP_BINARY"
-    echo "This is a menu bar app. Reopen the app to show its menu."
+    echo "This is a menu bar app. Click its status icon to show the menu."
 
     ;;
   *)

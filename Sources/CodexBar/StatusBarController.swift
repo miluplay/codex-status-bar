@@ -24,6 +24,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     }
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let statusMenu = NSMenu()
     private let reader = CodexStateReader()
     private let renderer = StatusIconRenderer()
     private let statusDotView = StatusDotView(color: StatusDotPalette.unread)
@@ -93,9 +94,9 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         statusItem.button?.setAccessibilityLabel("Codex 状态栏")
         statusItem.button?.toolTip = "Codex 状态栏"
 
-        let menu = NSMenu()
-        menu.delegate = self
-        statusItem.menu = menu
+        statusMenu.delegate = self
+        configureStatusItemActions()
+        configureApplicationMenu()
         statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.imageScaling = .scaleNone
         statusItem.button?.contentTintColor = nil
@@ -454,12 +455,44 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         button.wantsLayer = false
     }
 
-    func showMenu() {
-        guard let menu = statusItem.menu else { return }
-        menuNeedsUpdate(menu)
-        NSApp.activate(ignoringOtherApps: true)
-        // A context menu remains reachable when the status item is hidden or crowded out.
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    private func configureStatusItemActions() {
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(handleStatusItemClick(_:))
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    }
+
+    private func configureApplicationMenu() {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem(title: "Codex 状态栏", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Codex 状态栏")
+        let settings = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(settings)
+        appMenu.addItem(.separator())
+        let quit = NSMenuItem(title: "退出 Codex 状态栏", action: #selector(quit), keyEquivalent: "q")
+        quit.keyEquivalentModifierMask = .command
+        quit.target = self
+        appMenu.addItem(quit)
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            openSettings()
+        } else {
+            showMenu()
+        }
+    }
+
+    private func showMenu() {
+        guard !isMenuOpen, let button = statusItem.button else { return }
+        // Let NSStatusItem anchor and align the menu below the menu bar.
+        // A generic context-menu popup can shift upward to fit the screen.
+        statusItem.menu = statusMenu
+        button.performClick(nil)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -493,6 +526,8 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        statusItem.menu = nil
+        configureStatusItemActions()
         isMenuOpen = false
         sessionRows.removeAll()
         sessionRowIDs.removeAll()
@@ -530,7 +565,8 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     }
 
     private func refreshOpenSessionRows() {
-        guard isMenuOpen, let menu = statusItem.menu else { return }
+        guard isMenuOpen else { return }
+        let menu = statusMenu
 
         let sessions = visibleMenuSessions()
         let nextIDs = sessions.map(sessionRowKey)
