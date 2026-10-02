@@ -54,6 +54,8 @@ public struct SessionMetadata: Equatable, Sendable {
     public let source: String?
     public let threadSource: String?
     public let forkedFromID: String?
+    public let parentThreadID: String?
+    public let agentRole: String?
     public let createdAt: Date?
 
     public init(
@@ -63,6 +65,8 @@ public struct SessionMetadata: Equatable, Sendable {
         source: String?,
         threadSource: String?,
         forkedFromID: String? = nil,
+        parentThreadID: String? = nil,
+        agentRole: String? = nil,
         createdAt: Date?
     ) {
         self.id = id
@@ -71,11 +75,20 @@ public struct SessionMetadata: Equatable, Sendable {
         self.source = source
         self.threadSource = threadSource
         self.forkedFromID = forkedFromID
+        self.parentThreadID = parentThreadID
+        self.agentRole = agentRole
         self.createdAt = createdAt
     }
 
     public var client: CodexSessionClient? {
         CodexSessionClient.classify(originator: originator)
+    }
+
+    public var isSubagent: Bool {
+        threadSource?.lowercased() == "subagent"
+            || parentThreadID != nil
+            || source?.lowercased().contains("subagent") == true
+            || agentRole != nil
     }
 }
 
@@ -85,6 +98,9 @@ public struct CodexSession: Equatable, Sendable {
     public let rolloutPath: String
     public let cwd: String
     public let client: CodexSessionClient?
+    public let isSubagent: Bool
+    public let parentThreadID: String?
+    public let agentRole: String?
     public let updatedAt: Date?
     public let activeStartedAt: Date?
     public let lastEventAt: Date?
@@ -98,6 +114,9 @@ public struct CodexSession: Equatable, Sendable {
         rolloutPath: String,
         cwd: String,
         client: CodexSessionClient?,
+        isSubagent: Bool = false,
+        parentThreadID: String? = nil,
+        agentRole: String? = nil,
         updatedAt: Date?,
         activeStartedAt: Date?,
         lastEventAt: Date?,
@@ -110,6 +129,9 @@ public struct CodexSession: Equatable, Sendable {
         self.rolloutPath = rolloutPath
         self.cwd = cwd
         self.client = client
+        self.isSubagent = isSubagent
+        self.parentThreadID = parentThreadID
+        self.agentRole = agentRole
         self.updatedAt = updatedAt
         self.activeStartedAt = activeStartedAt
         self.lastEventAt = lastEventAt
@@ -279,6 +301,7 @@ public struct UsageWindow: Equatable, Sendable {
 }
 
 public struct CodexSnapshot: Equatable, Sendable {
+    public let processes: [CodexProcess]
     public let activeAgents: [ActiveAgent]
     public let sessions: [CodexSession]
     public let usage: UsageSnapshot?
@@ -286,12 +309,14 @@ public struct CodexSnapshot: Equatable, Sendable {
     public let lastError: String?
 
     public init(
+        processes: [CodexProcess] = [],
         activeAgents: [ActiveAgent],
         sessions: [CodexSession] = [],
         usage: UsageSnapshot?,
         generatedAt: Date,
         lastError: String?
     ) {
+        self.processes = processes
         self.activeAgents = activeAgents
         self.sessions = sessions
         self.usage = usage
@@ -300,7 +325,41 @@ public struct CodexSnapshot: Equatable, Sendable {
     }
 
     public static func empty(now: Date = Date(), lastError: String? = nil) -> CodexSnapshot {
-        CodexSnapshot(activeAgents: [], usage: nil, generatedAt: now, lastError: lastError)
+        CodexSnapshot(processes: [], activeAgents: [], usage: nil, generatedAt: now, lastError: lastError)
+    }
+}
+
+public enum CodexProcessStatus: String, Equatable, Sendable {
+    case running
+    case sleeping
+    case stopped
+    case zombie
+    case idle
+    case unknown
+
+    public var label: String {
+        switch self {
+        case .running: "运行中"
+        case .sleeping: "等待中"
+        case .stopped: "已暂停"
+        case .zombie: "已退出"
+        case .idle: "空闲"
+        case .unknown: "未知"
+        }
+    }
+}
+
+public struct CodexProcess: Equatable, Sendable {
+    public let pid: Int32
+    public let command: String
+    public let status: CodexProcessStatus
+    public let startedAt: Date?
+
+    public init(pid: Int32, command: String, status: CodexProcessStatus, startedAt: Date? = nil) {
+        self.pid = pid
+        self.command = command
+        self.status = status
+        self.startedAt = startedAt
     }
 }
 

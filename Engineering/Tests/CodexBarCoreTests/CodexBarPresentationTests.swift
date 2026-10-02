@@ -300,6 +300,25 @@ struct CodexBarPresentationTests {
     }
 
     @Test
+    func sessionRowsFallBackToRecentSessionsWhenUnreadStateIsUnavailable() {
+        let now = date("2026-06-24T20:02:00.000Z")
+        let snapshot = CodexSnapshot(
+            activeAgents: [],
+            sessions: [
+                session(id: "recent-1", title: "recent 1", client: .app, activeStartedAt: nil, isUnread: false),
+                session(id: "recent-2", title: "recent 2", client: .app, activeStartedAt: nil, isUnread: false),
+            ],
+            usage: nil,
+            generatedAt: now,
+            lastError: nil
+        )
+
+        let rows = CodexBarPresentation.sessionRows(snapshot: snapshot, limit: 6)
+
+        #expect(rows.map(\.id) == ["recent-1", "recent-2"])
+    }
+
+    @Test
     func sessionRowsExposeElapsedTimeTooltipAndAppDeepLink() {
         let now = date("2026-06-24T21:02:05.000Z")
         let snapshot = CodexSnapshot(
@@ -328,6 +347,78 @@ struct CodexBarPresentationTests {
         #expect(row?.isActive == true)
         #expect(row?.isUnread == false)
         #expect(row?.threadURL?.absoluteString == "codex://threads/019f08b4-91be-7091-bdb3-c92e769787e4")
+    }
+
+    @Test
+    func subagentRowsAreHiddenFromTheMenu() {
+        let now = date("2026-06-24T21:02:05.000Z")
+        let snapshot = CodexSnapshot(
+            activeAgents: [],
+            sessions: [
+                CodexSession(
+                    id: "child-thread",
+                    title: "Explore implementation",
+                    rolloutPath: "/tmp/child-thread.jsonl",
+                    cwd: "/tmp/project",
+                    client: .cli,
+                    isSubagent: true,
+                    agentRole: "explorer",
+                    updatedAt: now,
+                    activeStartedAt: nil,
+                    lastEventAt: now,
+                    statusLabel: nil,
+                    isUnread: true
+                )
+            ],
+            usage: nil,
+            generatedAt: now,
+            lastError: nil
+        )
+
+        let rows = CodexBarPresentation.sessionRows(snapshot: snapshot, limit: 6)
+
+        #expect(rows.isEmpty)
+    }
+
+    @Test
+    func subagentsAreHiddenAndCountedOnTheirParent() {
+        let now = date("2026-06-24T21:02:05.000Z")
+        let parent = session(
+            id: "parent-thread",
+            title: "主会话",
+            client: .app,
+            activeStartedAt: nil,
+            isUnread: false
+        )
+        let child = CodexSession(
+            id: "child-thread",
+            title: "子任务",
+            rolloutPath: "/tmp/child-thread.jsonl",
+            cwd: "/tmp/project",
+            client: .cli,
+            isSubagent: true,
+            parentThreadID: "parent-thread",
+            agentRole: "explorer",
+            updatedAt: now,
+            activeStartedAt: now,
+            lastEventAt: now,
+            statusLabel: "Thinking",
+            isUnread: false
+        )
+        let snapshot = CodexSnapshot(
+            activeAgents: [],
+            sessions: [child, parent],
+            usage: nil,
+            generatedAt: now,
+            lastError: nil
+        )
+
+        let rows = CodexBarPresentation.sessionRows(snapshot: snapshot, limit: 6)
+
+        #expect(rows.map(\.id) == ["parent-thread"])
+        #expect(rows.map(\.clientBadge) == ["APP"] as [String?])
+        #expect(CodexBarPresentation.visibleMenuSessions(snapshot: snapshot, limit: 6).map(\.id) == ["parent-thread"])
+        #expect(CodexBarPresentation.runningSubagentCount(snapshot: snapshot, parentID: "parent-thread") == 1)
     }
 
     @Test

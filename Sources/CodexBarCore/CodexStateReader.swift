@@ -38,7 +38,9 @@ public final class CodexStateReader {
 
     public var staleAfter: TimeInterval = 6 * 60 * 60
     public var missingActiveSessionGrace: TimeInterval = 5
-    public var threadLimit: Int = 20
+    // Keep polling responsive when Codex has copied large parent rollouts into
+    // several subagent files. The menu only exposes six rows by default.
+    public var threadLimit: Int = 6
 
     public init(
         codexHome: URL? = nil,
@@ -101,6 +103,9 @@ public final class CodexStateReader {
                 rolloutPath: thread.rolloutPath,
                 cwd: thread.cwd,
                 client: parsed.metadata?.client,
+                isSubagent: parsed.metadata?.isSubagent ?? false,
+                parentThreadID: parsed.metadata?.parentThreadID,
+                agentRole: parsed.metadata?.agentRole,
                 updatedAt: thread.updatedAt,
                 activeStartedAt: activeAgent?.startedAt,
                 lastEventAt: parsed.latestEventAt,

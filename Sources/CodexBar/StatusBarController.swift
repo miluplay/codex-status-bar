@@ -30,7 +30,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let statusMenu = NSMenu()
-    private let reader = CodexStateReader()
+    private let reader: CodexStateReader
     private let renderer = StatusIconRenderer()
     private let statusDotView = StatusDotView(color: StatusDotPalette.unread)
     private let codexConfigURL = CodexDesktopConfig.defaultConfigURL()
@@ -112,6 +112,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     }
 
     override init() {
+        reader = CodexStateReader()
         super.init()
         UNUserNotificationCenter.current().delegate = self
 
@@ -371,7 +372,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
             animationMode: iconAnimationMode,
             appearance: appearance
         )
-        let title = state.title.components(separatedBy: " · ").map(ChinesePresentation.text).joined(separator: " · ")
+        let title = ChinesePresentation.text(state.title)
         statusItem.button?.toolTip = nil
         applyTitle(title, statusDot: state.statusDot)
     }
@@ -519,6 +520,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
 
     private func showMenu() {
         guard !isMenuOpen, let button = statusItem.button else { return }
+        loadSnapshot()
         // Let NSStatusItem anchor and align the menu below the menu bar.
         // A generic context-menu popup can shift upward to fit the screen.
         statusItem.menu = statusMenu
@@ -570,7 +572,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         let sessions = visibleMenuSessions()
 
         guard !sessions.isEmpty else {
-            menu.addItem(disabledItem("No active or unread sessions"))
+            menu.addItem(disabledItem(isLoading ? "Loading sessions" : "No active or unread sessions"))
             return
         }
 
@@ -585,10 +587,16 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
 
     private func sessionMenuItem(for session: CodexSession) -> NSMenuItem {
         let item = NSMenuItem()
-        let view = SessionMenuItemView(width: MenuLayout.maxWidth, session: session, now: snapshot.generatedAt) { [weak self, weak item] currentSession in
-            item?.menu?.cancelTracking()
-            self?.openCodexThread(currentSession)
-        }
+        let view = SessionMenuItemView(
+            width: MenuLayout.maxWidth,
+            session: session,
+            now: snapshot.generatedAt,
+            runningSubagentCount: CodexBarPresentation.runningSubagentCount(snapshot: snapshot, parentID: session.id),
+            clickHandler: { [weak self, weak item] currentSession in
+                item?.menu?.cancelTracking()
+                self?.openCodexThread(currentSession)
+            }
+        )
         item.view = view
         sessionRows[sessionRowKey(for: session)] = view
         sessionRowIDs.append(sessionRowKey(for: session))
@@ -608,7 +616,12 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         }
 
         for session in sessions {
-            sessionRows[sessionRowKey(for: session)]?.update(session: session, now: snapshot.generatedAt)
+            let subagentCount = CodexBarPresentation.runningSubagentCount(snapshot: snapshot, parentID: session.id)
+            sessionRows[sessionRowKey(for: session)]?.update(
+                session: session,
+                now: snapshot.generatedAt,
+                runningSubagentCount: subagentCount
+            )
         }
     }
 
@@ -638,7 +651,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         sessionRowIDs.removeAll()
 
         if sessions.isEmpty {
-            menu.insertItem(disabledItem("No active or unread sessions"), at: startIndex)
+            menu.insertItem(disabledItem(isLoading ? "Loading sessions" : "No active or unread sessions"), at: startIndex)
             return
         }
 
@@ -956,12 +969,14 @@ private final class SessionMenuItemView: NSView {
     private let iconBox = NSView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let timeLabel = NSTextField(labelWithString: "")
+    private let subagentBadgeView: BadgeView
     private let badgeView: BadgeView
     private let chevronView = NSImageView()
     private let clickHandler: (CodexSession) -> Void
+    private var runningSubagentCount: Int
 
     private var isOpenable: Bool {
-        session.client == .app
+        session.client == .app || session.isSubagent
     }
 
     private var trackingArea: NSTrackingArea?
@@ -972,16 +987,24 @@ private final class SessionMenuItemView: NSView {
         }
     }
 
-    init(width: CGFloat, session: CodexSession, now: Date, clickHandler: @escaping (CodexSession) -> Void) {
+    init(
+        width: CGFloat,
+        session: CodexSession,
+        now: Date,
+        runningSubagentCount: Int,
+        clickHandler: @escaping (CodexSession) -> Void
+    ) {
         self.width = width
         self.session = session
-        self.badgeView = BadgeView(text: session.client?.rawValue)
+        self.runningSubagentCount = runningSubagentCount
+        self.subagentBadgeView = BadgeView(text: nil)
+        self.badgeView = BadgeView(text: session.isSubagent ? "SUB" : session.client?.rawValue)
         self.clickHandler = clickHandler
 
         super.init(frame: NSRect(origin: .zero, size: NSSize(width: width, height: Self.rowHeight)))
 
         setupLayout()
-        update(session: session, now: now)
+        update(session: session, now: now, runningSubagentCount: runningSubagentCount)
     }
 
     @available(*, unavailable)
@@ -1037,15 +1060,17 @@ private final class SessionMenuItemView: NSView {
         clickHandler(session)
     }
 
-    func update(session: CodexSession, now: Date) {
+    func update(session: CodexSession, now: Date, runningSubagentCount: Int) {
         self.session = session
+        self.runningSubagentCount = runningSubagentCount
         if !isOpenable {
             highlighted = false
         }
 
-        titleLabel.stringValue = session.title
-        badgeView.update(text: session.client?.rawValue)
-        updateIconIfNeeded(indicator: leadingIndicator(for: session))
+        titleLabel.stringValue = session.isSubagent ? "子代理 · \(session.title)" : session.title
+        subagentBadgeView.update(text: !session.isSubagent && runningSubagentCount > 0 ? "\(runningSubagentCount)SUB" : nil)
+        badgeView.update(text: session.isSubagent ? "SUB" : session.client?.rawValue)
+        updateIconIfNeeded(indicator: leadingIndicator(for: session, runningSubagentCount: runningSubagentCount))
         updateElapsedTime(now: now)
         updateColors()
     }
@@ -1066,7 +1091,7 @@ private final class SessionMenuItemView: NSView {
         badgeView.setContentCompressionResistancePriority(.required, for: .horizontal)
         badgeView.setContentHuggingPriority(.required, for: .horizontal)
 
-        let stack = NSStackView(views: [iconBox, titleLabel, timeLabel, badgeView])
+        let stack = NSStackView(views: [iconBox, titleLabel, timeLabel, subagentBadgeView, badgeView])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.detachesHiddenViews = true
         stack.orientation = .horizontal
@@ -1079,7 +1104,7 @@ private final class SessionMenuItemView: NSView {
         NSLayoutConstraint.activate([
             iconBox.widthAnchor.constraint(equalToConstant: Self.iconBoxWidth),
             iconBox.heightAnchor.constraint(equalToConstant: 14),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: session.isSubagent ? 30 : 12),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -1152,13 +1177,13 @@ private final class SessionMenuItemView: NSView {
         NSLayoutConstraint.activate(iconConstraints)
     }
 
-    private func leadingIndicator(for session: CodexSession) -> LeadingIndicator {
+    private func leadingIndicator(for session: CodexSession, runningSubagentCount: Int) -> LeadingIndicator {
         if let statusLabel = session.statusLabel,
            CodexBarPresentation.isApprovalLabel(statusLabel) {
             return .approval
         }
 
-        if session.isActive {
+        if session.isActive || runningSubagentCount > 0 {
             return .active
         }
 
@@ -1176,7 +1201,7 @@ private final class SessionMenuItemView: NSView {
         if highlighted {
             primaryColor = .selectedMenuItemTextColor
             secondaryColor = .selectedMenuItemTextColor.withAlphaComponent(0.84)
-        } else if session.isActive || session.isUnread {
+        } else if session.isActive || session.isUnread || runningSubagentCount > 0 {
             primaryColor = .labelColor
             secondaryColor = .secondaryLabelColor
         } else {
@@ -1187,6 +1212,7 @@ private final class SessionMenuItemView: NSView {
         titleLabel.textColor = primaryColor
         timeLabel.textColor = secondaryColor
         chevronView.contentTintColor = secondaryColor
+        subagentBadgeView.rowHighlighted = highlighted
         badgeView.rowHighlighted = highlighted
     }
 
@@ -1266,7 +1292,7 @@ private final class BadgeView: NSButton {
     }
 
     func update(text: String?) {
-        guard self.text != text else { return }
+        guard self.text != text || isHidden != (text == nil) else { return }
 
         self.text = text
         isHidden = text == nil

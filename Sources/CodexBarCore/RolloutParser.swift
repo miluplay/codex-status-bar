@@ -230,16 +230,48 @@ public final class RolloutParser {
     private func parseSessionMetadata(from payload: [String: Any], rootTimestamp: Date?) -> SessionMetadata {
         let timestamp = DateParsing.parseISO8601(payload["timestamp"] as? String) ?? rootTimestamp
         let id = (payload["id"] as? String)?.nilIfEmpty ?? (payload["session_id"] as? String)?.nilIfEmpty
+        let sourceDetails = payload["source"] as? [String: Any]
+        let parentThreadID = (payload["parent_thread_id"] as? String)?.nilIfEmpty
+            ?? Self.stringValue(in: sourceDetails, matchingKeys: ["parent_thread_id", "parentThreadId"])
+        let agentRole = Self.stringValue(in: sourceDetails, matchingKeys: ["agent_role", "agent_type", "agentRole"])
+            ?? (payload["agent_role"] as? String)?.nilIfEmpty
+            ?? (payload["agent_type"] as? String)?.nilIfEmpty
+        let source = (payload["source"] as? String)?.nilIfEmpty
+            ?? (sourceDetails.map(Self.sourceDescription))
 
         return SessionMetadata(
             id: id,
             cwd: payload["cwd"] as? String ?? "",
             originator: payload["originator"] as? String,
-            source: payload["source"] as? String,
+            source: source,
             threadSource: payload["thread_source"] as? String,
             forkedFromID: payload["forked_from_id"] as? String,
+            parentThreadID: parentThreadID,
+            agentRole: agentRole,
             createdAt: timestamp
         )
+    }
+
+    private static func stringValue(in value: [String: Any]?, matchingKeys keys: Set<String>) -> String? {
+        guard let value else { return nil }
+        for (key, nestedValue) in value {
+            if keys.contains(key), let string = nestedValue as? String, let result = string.nilIfEmpty {
+                return result
+            }
+            if let nested = nestedValue as? [String: Any],
+               let result = stringValue(in: nested, matchingKeys: keys) {
+                return result
+            }
+        }
+        return nil
+    }
+
+    private static func sourceDescription(_ value: [String: Any]) -> String {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              let description = String(data: data, encoding: .utf8)
+        else { return "" }
+        return description
     }
 
     private func parseUsage(from payload: [String: Any], capturedAt: Date) -> UsageSnapshot? {

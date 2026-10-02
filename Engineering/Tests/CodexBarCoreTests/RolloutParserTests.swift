@@ -263,6 +263,20 @@ struct RolloutParserTests {
     }
 
     @Test
+    func subagentMetadataIsRecognizedFromCurrentSourceShape() {
+        let parsed = parser.parse(lines: [
+            """
+            {"timestamp":"2026-10-02T10:00:00.000Z","type":"session_meta","payload":{"id":"child-thread","cwd":"/tmp/project","originator":"codex_cli_rs","forked_from_id":"parent-thread","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1,"agent_role":"explorer"}}},"thread_source":"subagent"}}
+            """
+        ])
+
+        #expect(parsed.metadata?.isSubagent == true)
+        #expect(parsed.metadata?.parentThreadID == "parent-thread")
+        #expect(parsed.metadata?.agentRole == "explorer")
+        #expect(parsed.forkedFromID == "parent-thread")
+    }
+
+    @Test
     func continuedThreadKeepsFirstMetadataAndTracksImportedIDs() {
         let parsed = parser.parse(lines: [
             """

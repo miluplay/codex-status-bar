@@ -278,7 +278,31 @@ public enum CodexBarPresentation {
         snapshot: CodexSnapshot,
         limit: Int
     ) -> [CodexSession] {
-        Array(snapshot.sessions.filter(\.isVisibleInSessionMenu).prefix(limit))
+        let visible = snapshot.sessions.filter(\.isVisibleInSessionMenu)
+        let visibleParents = visible.filter { !$0.isSubagent }
+        var selectedIDs = Set(visibleParents.map(\.id))
+        for child in visible where child.isSubagent {
+            if let parentID = child.parentThreadID,
+               snapshot.sessions.contains(where: { $0.id == parentID }) {
+                selectedIDs.insert(parentID)
+            }
+        }
+
+        let base = visible.isEmpty
+            ? snapshot.sessions.filter { !$0.isSubagent }
+            : snapshot.sessions.filter { selectedIDs.contains($0.id) && !$0.isSubagent }
+        guard !base.isEmpty else { return [] }
+
+        // Newer Codex builds do not always persist the desktop unread list.
+        // Keep the menu useful by showing the most recently updated sessions
+        // when there is no active or unread subset to display.
+        return Array(base.prefix(limit))
+    }
+
+    public static func runningSubagentCount(snapshot: CodexSnapshot, parentID: String) -> Int {
+        snapshot.sessions.filter {
+            $0.isSubagent && $0.parentThreadID == parentID && $0.isActive
+        }.count
     }
 
     public static func sessionRows(
@@ -289,7 +313,7 @@ public enum CodexBarPresentation {
             CodexSessionMenuRow(
                 id: session.id,
                 title: session.title,
-                clientBadge: session.client?.rawValue,
+                clientBadge: session.isSubagent ? "SUB" : session.client?.rawValue,
                 timeText: session.activeStartedAt.map { elapsedText(since: $0, now: snapshot.generatedAt) } ?? "",
                 statusTooltip: session.statusLabel,
                 isActive: session.isActive,
@@ -300,7 +324,7 @@ public enum CodexBarPresentation {
     }
 
     private static func threadURL(for session: CodexSession) -> URL? {
-        guard session.client == .app else { return nil }
+        guard session.client == .app || session.isSubagent else { return nil }
         return codexThreadURL(for: session.id)
     }
 

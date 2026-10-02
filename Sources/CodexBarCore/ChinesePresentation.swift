@@ -3,7 +3,8 @@ import Foundation
 /// Translates display copy without changing the parser's canonical status labels.
 public enum ChinesePresentation {
     private static let copy: [String: String] = [
-        "Open Codex": "打开 Codex", "Sessions": "会话", "No active or unread sessions": "暂无活跃或未读会话",
+        "Open Codex": "打开 Codex", "Sessions": "会话", "Loading sessions": "正在读取会话…", "No active or unread sessions": "暂无活跃或未读会话",
+        "运行中": "运行中", "等待中": "等待中", "已暂停": "已暂停", "已退出": "已退出", "空闲": "空闲", "未知": "未知",
         "Quit Codex Status Bar": "退出 Codex 状态栏", "Options": "选项", "Show timer": "显示计时",
         "Show 5-hour usage": "显示 5 小时用量", "Show weekly usage": "显示每周用量", "Start at login": "登录时启动",
         "Color": "颜色", "Animation": "动画", "System": "跟随系统", "Colorful": "彩色",
