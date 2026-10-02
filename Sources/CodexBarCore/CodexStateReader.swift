@@ -348,19 +348,6 @@ public final class CodexStateReader {
         return files
     }
 
-    private func laterDate(_ left: Date?, _ right: Date?) -> Date? {
-        switch (left, right) {
-        case let (left?, right?):
-            return max(left, right)
-        case let (left?, nil):
-            return left
-        case let (nil, right?):
-            return right
-        case (nil, nil):
-            return nil
-        }
-    }
-
     private static func sessionID(from url: URL) -> String {
         let fileName = url.deletingPathExtension().lastPathComponent
         guard fileName.count >= 36 else { return fileName }
