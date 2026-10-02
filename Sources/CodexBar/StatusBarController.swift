@@ -16,7 +16,6 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         static let showMenuFiveHourUsage = "showMenuFiveHourUsage"
         static let showMenuWeeklyUsage = "showMenuWeeklyUsage"
         static let numericUsageCountdown = "numericUsageCountdown"
-        static let iconColorMode = "iconColorMode"
         static let iconAnimationMode = "iconAnimationMode"
         static let didShowCodexAvailabilityCheck = "didShowCodexAvailabilityCheck"
         static let didOfferDisableCodexMenuBarIcon = "didOfferDisableCodexMenuBarIcon"
@@ -30,13 +29,17 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let statusMenu = NSMenu()
+    private let workspace = NSWorkspace.shared
     private let reader: CodexStateReader
+    private let processReader = CodexProcessReader()
     private let renderer = StatusIconRenderer()
     private let statusDotView = StatusDotView(color: StatusDotPalette.unread)
     private let codexConfigURL = CodexDesktopConfig.defaultConfigURL()
     private let readerQueue = DispatchQueue(label: "CodexBar.reader", qos: .utility)
+    private let processReaderQueue = DispatchQueue(label: "CodexBar.processReader", qos: .utility)
     private let sessionMenuLimit = 6
     private let pollInterval: TimeInterval = 0.2
+    private let processPollInterval: TimeInterval = 1.0
 
     private var notificationTracker = CodexNotificationTracker()
     private var notificationGenerations: [String: Int] = [:]
@@ -45,11 +48,15 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     private var usageMenuView: UsageMenuItemView?
 
     private var pollTimer: Timer?
+    private var processPollTimer: Timer?
     private var animationTimer: Timer?
     private var animationTimerMode: StatusIconAnimationMode?
     private var animationFrame = 0
     private var isLoading = false
     private var isMenuOpen = false
+    private var codexDesktopIsRunning = false
+    private var codexProcesses: [CodexProcess] = []
+    private var renderedIconState: RenderedIconState?
     private var snapshot = CodexSnapshot.empty()
     private var sessionRows: [String: SessionMenuItemView] = [:]
     private var sessionRowIDs: [String] = []
@@ -95,14 +102,6 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.numericUsageCountdown) }
     }
 
-    private var iconColorMode: StatusIconColorMode {
-        get {
-            let rawValue = UserDefaults.standard.string(forKey: DefaultsKey.iconColorMode) ?? StatusIconColorMode.system.rawValue
-            return StatusIconColorMode(rawValue: rawValue) ?? .system
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: DefaultsKey.iconColorMode) }
-    }
-
     private var iconAnimationMode: StatusIconAnimationMode {
         get {
             let rawValue = UserDefaults.standard.string(forKey: DefaultsKey.iconAnimationMode) ?? StatusIconAnimationMode.orbit.rawValue
@@ -115,6 +114,19 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         reader = CodexStateReader()
         super.init()
         UNUserNotificationCenter.current().delegate = self
+        codexDesktopIsRunning = isCodexDesktopRunning()
+        workspace.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleApplicationLaunch(_:)),
+            name: NSWorkspace.didLaunchApplicationNotification,
+            object: nil
+        )
+        workspace.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleApplicationTermination(_:)),
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
 
         statusItem.autosaveName = "CodexStatusBar.Main"
         statusItem.isVisible = true
@@ -141,9 +153,21 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         RunLoop.main.add(timer, forMode: .eventTracking)
         pollTimer = timer
 
+        let processTimer = Timer(timeInterval: processPollInterval, repeats: true) { [weak self] _ in
+            self?.loadCodexProcesses()
+        }
+        RunLoop.main.add(processTimer, forMode: .common)
+        RunLoop.main.add(processTimer, forMode: .eventTracking)
+        processPollTimer = processTimer
+        loadCodexProcesses()
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             self?.runFirstLaunchChecks()
         }
+    }
+
+    deinit {
+        workspace.notificationCenter.removeObserver(self)
     }
 
     private func runFirstLaunchChecks() {
@@ -315,9 +339,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     }
 
     private func runningCodexDesktopApplications() -> [NSRunningApplication] {
-        NSWorkspace.shared.runningApplications.filter { application in
-            application.bundleIdentifier == "com.openai.codex"
-        }
+        workspace.runningApplications.filter(isCodexDesktopApplication)
     }
 
     @discardableResult
@@ -341,7 +363,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
         guard !isLoading else { return }
         isLoading = true
 
-        readerQueue.async { [reader] in
+        readerQueue.async { [weak self, reader] in
             let next = reader.loadSnapshot()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -362,16 +384,28 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
             options: displayOptions(),
             now: Date()
         )
-        updateAnimation(active: state.animatesIcon, mode: iconAnimationMode)
-
-        let appearance = statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance
-        statusItem.button?.image = renderer.image(
+        let colorMode: StatusIconColorMode = codexIsRunning ? .colorful : .system
+        let iconState = RenderedIconState(
             active: state.animatesIcon,
-            frame: animationFrame,
-            colorMode: iconColorMode,
-            animationMode: iconAnimationMode,
-            appearance: appearance
+            colorMode: colorMode,
+            animationMode: iconAnimationMode
         )
+        let iconStateChanged = renderedIconState != iconState
+        if iconStateChanged {
+            renderedIconState = iconState
+            updateAnimation(active: state.animatesIcon, mode: iconAnimationMode)
+        }
+
+        if iconStateChanged || state.animatesIcon {
+            let appearance = statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance
+            statusItem.button?.image = renderer.image(
+                active: state.animatesIcon,
+                frame: animationFrame,
+                colorMode: colorMode,
+                animationMode: iconAnimationMode,
+                appearance: appearance
+            )
+        }
         let title = ChinesePresentation.text(state.title)
         statusItem.button?.toolTip = nil
         applyTitle(title, statusDot: state.statusDot)
@@ -394,6 +428,65 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
             animationTimerMode = nil
             animationFrame = 0
         }
+    }
+
+    private var codexIsRunning: Bool {
+        codexDesktopIsRunning || codexProcesses.contains { $0.status != .zombie }
+    }
+
+    private func isCodexDesktopApplication(_ application: NSRunningApplication) -> Bool {
+        application.bundleIdentifier == "com.openai.codex"
+    }
+
+    private func updateCodexDesktopState(_ isRunning: Bool) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.updateCodexDesktopState(isRunning)
+            }
+            return
+        }
+
+        guard codexDesktopIsRunning != isRunning else { return }
+        codexDesktopIsRunning = isRunning
+        render()
+    }
+
+    @objc private func handleApplicationLaunch(_ notification: Notification) {
+        guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              isCodexDesktopApplication(application)
+        else {
+            return
+        }
+
+        updateCodexDesktopState(true)
+    }
+
+    @objc private func handleApplicationTermination(_ notification: Notification) {
+        guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              isCodexDesktopApplication(application)
+        else {
+            return
+        }
+
+        updateCodexDesktopState(isCodexDesktopRunning())
+    }
+
+    private func loadCodexProcesses() {
+        let processReader = self.processReader
+        processReaderQueue.async { [weak self, processReader] in
+            let processes = processReader.load()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.codexProcesses != processes else { return }
+                self.codexProcesses = processes
+                self.render()
+            }
+        }
+    }
+
+    private struct RenderedIconState: Equatable {
+        let active: Bool
+        let colorMode: StatusIconColorMode
+        let animationMode: StatusIconAnimationMode
     }
 
     private func displayOptions() -> CodexBarDisplayOptions {
@@ -663,9 +756,11 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
     @objc private func openSettings() {
         if settingsWindowController == nil {
             let settings = SettingsWindowController(version: ChinesePresentation.text(versionTitle()))
-            settings.addSection("显示")
+            settings.addSection("会话状态")
+            settings.addDescription("控制菜单栏中的会话状态信息。关闭状态文字后，菜单栏图标仍会继续表示当前状态。")
             settings.addToggle("显示状态文字", state: { [weak self] in self?.showStatusText == true ? .on : .off }, action: { [weak self] in self?.toggleStatusText() })
             settings.addToggle("显示运行计时", state: { [weak self] in self?.showTimer == true ? .on : .off }, action: { [weak self] in self?.toggleTimer() })
+            settings.addSection("用量显示")
             settings.addChoice("菜单栏 5H", options: MenuBarUsageVisibility.allCases.map { ($0.title, $0.rawValue) }, selected: { [weak self] in self?.fiveHourUsageVisibility.rawValue ?? MenuBarUsageVisibility.idle.rawValue }) { [weak self] value in
                 guard let self, let mode = MenuBarUsageVisibility(rawValue: value) else { return }
                 self.fiveHourUsageVisibility = mode
@@ -691,11 +786,7 @@ final class StatusBarController: NSObject, NSMenuDelegate, UNUserNotificationCen
             settings.addDescription("数字倒计时：5H 为时:分:秒，7D 为天:时:分。")
             settings.addDescription("细线的灰色部分表示已用额度，蓝色游标表示周期时间进度。已用比例超过时间进度时，说明当前消耗较快。线下左侧为重置时间，右侧为剩余额度。")
             settings.addSection("外观")
-            settings.addChoice("图标颜色", options: StatusIconColorMode.allCases.map { (ChinesePresentation.text($0.title), $0.rawValue) }, selected: { [weak self] in self?.iconColorMode.rawValue ?? StatusIconColorMode.system.rawValue }) { [weak self] value in
-                guard let self, let mode = StatusIconColorMode(rawValue: value) else { return }
-                self.iconColorMode = mode
-                self.render()
-            }
+            settings.addDescription("Codex 运行时使用彩色图标，未运行时使用黑白图标；会话正在处理时播放动画，等待输入或授权时保持静止。")
             settings.addChoice("动画效果", options: StatusIconAnimationMode.allCases.map { (ChinesePresentation.text($0.title), $0.rawValue) }, selected: { [weak self] in self?.iconAnimationMode.rawValue ?? StatusIconAnimationMode.orbit.rawValue }) { [weak self] value in
                 guard let self, let mode = StatusIconAnimationMode(rawValue: value) else { return }
                 self.iconAnimationMode = mode
@@ -1039,7 +1130,7 @@ private final class SessionMenuItemView: NSView {
 
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .activeAlways],
             owner: self
         )
         addTrackingArea(area)
@@ -1047,7 +1138,11 @@ private final class SessionMenuItemView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        guard isOpenable else { return }
+        guard isOpenable,
+              bounds.contains(convert(event.locationInWindow, from: nil))
+        else {
+            return
+        }
         highlighted = true
     }
 

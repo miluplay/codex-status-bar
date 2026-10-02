@@ -9,13 +9,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(version: String) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 780),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Codex 状态栏设置"
         window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 460, height: 780)
         super.init(window: window)
         window.delegate = self
         window.setFrameAutosaveName("CodexStatusBar.Settings")
@@ -33,7 +34,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
         ])
 
-        let subtitle = NSTextField(wrappingLabelWithString: "调整菜单栏显示与通知，修改后立即生效。")
+        let subtitle = NSTextField(wrappingLabelWithString: "调整菜单栏会话状态、用量、图标与通知，修改后立即生效。")
         subtitle.textColor = .secondaryLabelColor
         stack.addArrangedSubview(subtitle)
         let versionLabel = NSTextField(labelWithString: version)

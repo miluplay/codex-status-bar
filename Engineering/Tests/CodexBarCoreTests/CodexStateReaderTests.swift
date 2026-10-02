@@ -496,6 +496,36 @@ struct CodexStateReaderTests {
     }
 
     @Test
+    func completedSessionBecomesActiveWhenAContinuationStarts() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent("CodexBarContinuationTests-\(UUID().uuidString)")
+        defer { try? fileManager.removeItem(at: root) }
+
+        let rollout = try writeSession(
+            in: root,
+            id: "thread-1",
+            folderName: "continuation-test",
+            timestamp: date("2026-06-24T20:00:00.000Z"),
+            completed: true
+        )
+        let reader = CodexStateReader(codexHome: root)
+        let idleSnapshot = reader.loadSnapshot(now: date("2026-06-24T20:00:30.000Z"))
+        #expect(idleSnapshot.activeAgents.isEmpty)
+
+        try appendLine(
+            """
+            {"timestamp":"2026-06-24T20:01:00.000Z","type":"event_msg","payload":{"type":"task_started"}}
+            """,
+            to: rollout,
+            modifiedAt: date("2026-06-24T20:01:00.000Z")
+        )
+        let activeSnapshot = reader.loadSnapshot(now: date("2026-06-24T20:01:10.000Z"))
+
+        #expect(activeSnapshot.activeAgents.count == 1)
+        #expect(activeSnapshot.sessions.first?.isActive == true)
+    }
+
+    @Test
     func activeSessionRemainsVisibleDuringBriefFileDisappearance() throws {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory.appendingPathComponent("CodexBarMissingActiveTests-\(UUID().uuidString)")
